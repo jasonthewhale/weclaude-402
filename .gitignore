@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Runtime data
+data/
+cmds/.env.test
+
+# Build output
+dist/
+
+# Bun
+bun.lock
+
+# Claude Code local settings (contains local permissions, not for sharing)
+.claude/settings.local.json
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Markdown docs (exclude all except README)
+*.md
+!README.md

@@ -1,0 +1,25 @@
+{
+  "name": "weclaude-402",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "login": "bun run scripts/login.ts",
+    "login:manual": "bun run scripts/login.ts --manual",
+    "test:oauth2api": "bun run scripts/test-oauth2api.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.88.0",
+    "@okxweb3/x402-core": "^0.1.0",
+    "@okxweb3/x402-evm": "^0.1.0",
+    "@okxweb3/x402-express": "^0.1.0",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "bun-types": "^1.3.12",
+    "typescript": "^5.8.3"
+  }
+}
