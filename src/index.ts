@@ -20,6 +20,7 @@
  */
 
 import path from "path";
+import fs from "fs";
 import express from "express";
 import { paymentMiddlewareFromHTTPServer } from "@okxweb3/x402-express";
 
@@ -82,14 +83,39 @@ async function main() {
   const app = express();
   app.use(express.json({ limit: "50mb" }));
 
-  // x402 payment middleware (handles 402 challenge/response for /v1/topup)
+  // ── TEMP: request/response logger (testing only) ──
+  const LOG_FILE = path.join(process.cwd(), "data", "request-log.jsonl");
+  app.use((req, res, next) => {
+    const startMs = Date.now();
+    const originalJson = res.json.bind(res);
+    let captured: any;
+    res.json = (body: any) => {
+      captured = body;
+      return originalJson(body);
+    };
+    res.on("finish", () => {
+      const entry = {
+        ts: new Date().toISOString(),
+        method: req.method,
+        path: req.path,
+        status: res.statusCode,
+        duration_ms: Date.now() - startMs,
+        request_body: req.body,
+        response_body: captured,
+      };
+      fs.appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
+    });
+    next();
+  });
   app.use(paymentMiddlewareFromHTTPServer(httpServer));
 
   // ── Payment routes (no balance check) ──
   app.post("/v1/topup", handleTopup);
+  app.post("/v1/topup/:amount", handleTopup); // e.g. POST /v1/topup/0.5 → $0.50
   app.post("/v1/close", handleClose);
   app.get("/v1/balance", handleBalance);
   app.get("/health", handleHealth);
+  app.all("/", (_req, res) => res.sendStatus(200));
 
   // ── Balance-gated LLM proxy ──
   // The oauth2api router handles: /v1/chat/completions, /v1/messages,
@@ -105,8 +131,8 @@ async function main() {
     const inputTok = (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0);
     const outputTok = usage.output_tokens || 0;
 
-    // Update balance
-    account.balanceUsd -= cost;
+    // Update balance (clamp at zero — actual cost may exceed estimate)
+    account.balanceUsd = Math.max(0, account.balanceUsd - cost);
     account.usedUsd += cost;
     setBalance(key, account);
 

@@ -12,7 +12,7 @@ import {
 import { getBuyerByPayer, logTransaction } from "./db.js";
 import { extractKey } from "./middleware.js";
 import { refundBuyer } from "./refund.js";
-import { TOPUP_USD, NETWORK, PAY_TO } from "../config.js";
+import { TOPUP_USD, TOPUP_TIERS, NETWORK, PAY_TO } from "../config.js";
 
 /**
  * POST /v1/topup — x402 payment settled by middleware, then issue API key.
@@ -21,6 +21,10 @@ import { TOPUP_USD, NETWORK, PAY_TO } from "../config.js";
  * of creating a new one.
  */
 export function handleTopup(req: Request, res: Response): void {
+  // Resolve topup amount from path param (e.g. /v1/topup/0.5 → $0.50)
+  const paramUsd = req.params?.amount ? parseFloat(req.params.amount) : NaN;
+  const topupUsd = !isNaN(paramUsd) && TOPUP_TIERS.includes(paramUsd) ? paramUsd : TOPUP_USD;
+
   let payer = "unknown";
   const paymentSig = req.headers["payment-signature"] as string;
   if (paymentSig) {
@@ -38,23 +42,23 @@ export function handleTopup(req: Request, res: Response): void {
     // Top up existing account
     apiKey = existing.api_key;
     const account = getBalance(apiKey)!;
-    account.balanceUsd += TOPUP_USD;
+    account.balanceUsd += topupUsd;
     setBalance(apiKey, account);
-    logTransaction(apiKey, "topup", TOPUP_USD);
-    console.log(`[topup] existing key=${apiKey.slice(0, 16)}... +$${TOPUP_USD} balance=$${account.balanceUsd.toFixed(6)} payer=${payer}`);
+    logTransaction(apiKey, "topup", topupUsd);
+    console.log(`[topup] existing key=${apiKey.slice(0, 16)}... +$${topupUsd} balance=$${account.balanceUsd.toFixed(6)} payer=${payer}`);
   } else {
     // New buyer
     apiKey = generateApiKey();
     const account: AccountBalance = {
       apiKey,
-      balanceUsd: TOPUP_USD,
+      balanceUsd: topupUsd,
       usedUsd: 0,
       payer,
       createdAt: Date.now(),
     };
     setBalance(apiKey, account);
-    logTransaction(apiKey, "topup", TOPUP_USD);
-    console.log(`[topup] new key=${apiKey.slice(0, 16)}... balance=$${TOPUP_USD} payer=${payer}`);
+    logTransaction(apiKey, "topup", topupUsd);
+    console.log(`[topup] new key=${apiKey.slice(0, 16)}... balance=$${topupUsd} payer=${payer}`);
   }
 
   res.json({

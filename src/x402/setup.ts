@@ -9,7 +9,7 @@ import {
 } from "@okxweb3/x402-express";
 import { ExactEvmScheme } from "@okxweb3/x402-evm/exact/server";
 import { AggrDeferredEvmScheme } from "@okxweb3/x402-evm/deferred/server";
-import { NETWORK, PAY_TO, USDG_ASSET, TOPUP_AMOUNT, TOPUP_USD } from "../config.js";
+import { NETWORK, PAY_TO, USDG_ASSET, TOPUP_USD, TOPUP_TIERS, usdToAtomic } from "../config.js";
 
 export interface X402Setup {
   resourceServer: InstanceType<typeof x402ResourceServer>;
@@ -38,27 +38,21 @@ export function createX402Setup(): X402Setup {
   resourceServer.register(NETWORK, new ExactEvmScheme());
   resourceServer.register(NETWORK, new AggrDeferredEvmScheme());
 
-  const topupRoutes = {
-    "POST /v1/topup": {
+  // Register one x402 route per topup tier so the payment middleware can
+  // validate the correct amount before the handler runs.
+  const topupRoutes: Record<string, { accepts: any[]; description: string }> = {};
+
+  for (const usd of TOPUP_TIERS) {
+    const amount = usdToAtomic(usd);
+    const path = usd === TOPUP_USD ? "POST /v1/topup" : `POST /v1/topup/${usd}`;
+    topupRoutes[path] = {
       accepts: [
-        {
-          scheme: "exact",
-          network: NETWORK,
-          payTo: PAY_TO,
-          price: { asset: USDG_ASSET, amount: TOPUP_AMOUNT },
-          maxTimeoutSeconds: 600,
-        },
-        {
-          scheme: "aggr_deferred",
-          network: NETWORK,
-          payTo: PAY_TO,
-          price: { asset: USDG_ASSET, amount: TOPUP_AMOUNT },
-          maxTimeoutSeconds: 600,
-        },
+        { scheme: "exact",         network: NETWORK, payTo: PAY_TO, price: { asset: USDG_ASSET, amount }, maxTimeoutSeconds: 600 },
+        { scheme: "aggr_deferred", network: NETWORK, payTo: PAY_TO, price: { asset: USDG_ASSET, amount }, maxTimeoutSeconds: 600 },
       ],
-      description: `Top up $${TOPUP_USD} USDG — get an API key for Claude API access`,
-    },
-  };
+      description: `Top up $${usd} USDG — get an API key for Claude API access`,
+    };
+  }
 
   const httpServer = new x402HTTPResourceServer(resourceServer, topupRoutes);
 

@@ -5,9 +5,17 @@ export const PORT = 4021;
 // USDG on X Layer (6 decimals)
 export const USDG_ASSET = "0x4ae46a509f6b1d9056937ba4500cb143933d2dc8";
 
-// Topup: $0.10 USDG = 100_000 atomic units
+// Default topup: $0.10 USDG = 100_000 atomic units
 export const TOPUP_AMOUNT = "100000";
 export const TOPUP_USD = 0.1;
+
+// Supported topup tiers (USD). Each gets its own x402 route.
+export const TOPUP_TIERS: number[] = [0.1, 0.5, 1.0, 5.0];
+
+/** Convert USD amount to USDG atomic units (6 decimals). */
+export function usdToAtomic(usd: number): string {
+  return Math.round(usd * 1_000_000).toString();
+}
 
 // Minimum balance required to attempt an API call (pre-flight sanity check).
 // Actual cost is deducted after the call based on real token usage.

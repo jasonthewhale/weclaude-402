@@ -95,7 +95,9 @@ export function estimateCost(model: string, body: any): number {
   }
 
   const estimatedInputTokens = Math.max(Math.ceil(inputChars / 4), 100);
-  const estimatedOutputTokens = body.max_tokens || 1024;
+  // Cap at 1024: max_tokens is the theoretical maximum, not the expected output.
+  // Using it raw causes false 402s for short requests with large max_tokens (e.g. Claude Code sends 32000).
+  const estimatedOutputTokens = Math.min(body.max_tokens || 1024, 1024);
 
   const inputCost = (estimatedInputTokens / 1_000_000) * pricing.inputPerMTok;
   const outputCost = (estimatedOutputTokens / 1_000_000) * pricing.outputPerMTok;
