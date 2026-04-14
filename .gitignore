@@ -25,6 +25,7 @@ bun.lock
 # Logs
 *.log
 
-# Markdown docs (exclude all except README)
+# Markdown docs (exclude all except README and CLAUDE.md)
 *.md
 !README.md
+!CLAUDE.md
