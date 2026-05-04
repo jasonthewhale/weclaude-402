@@ -13,18 +13,27 @@ import type {
   AvailableAccount,
   AccountResult,
   AccountSnapshot,
+  CloakingConfig,
 } from "./types.js";
 import { refreshTokensWithRetry } from "./oauth.js";
-import { saveToken, loadAllTokens, getDeviceId } from "./storage.js";
+import { saveToken, loadAllTokens, getDeviceId, deleteToken } from "./storage.js";
+import { buildHeaders } from "./headers.js";
 
 const REFRESH_LEAD_MS = 4 * 60 * 60 * 1000; // 4 hours before expiry
 const REFRESH_CHECK_INTERVAL_MS = 60 * 1000; // check every 60s
+
+const VALIDATION_INTERVAL_MS = 5 * 60 * 1000; // re-validate every 5 minutes
+const VALIDATION_CACHE_MS = 5 * 60 * 1000;    // skip re-check if validated within 5 min
+const VALIDATION_TIMEOUT_MS = 10_000;
+const VALIDATION_MODEL = "claude-haiku-4-5-20251001";
+const ANTHROPIC_COUNT_TOKENS_URL = "https://api.anthropic.com/v1/messages/count_tokens?beta=true";
 
 const FAILURE_BACKOFF: Record<
   AccountFailureKind,
   { baseMs: number; maxMs: number }
 > = {
   rate_limit: { baseMs: 60 * 1000, maxMs: 15 * 60 * 1000 },
+  quota_exhausted: { baseMs: 60 * 60 * 1000, maxMs: 6 * 60 * 60 * 1000 }, // 1h → 6h
   auth: { baseMs: 10 * 60 * 1000, maxMs: 60 * 60 * 1000 },
   forbidden: { baseMs: 10 * 60 * 1000, maxMs: 60 * 60 * 1000 },
   server: { baseMs: 5 * 1000, maxMs: 5 * 60 * 1000 },
@@ -35,16 +44,13 @@ const FAILURE_PRIORITY: Record<AccountFailureKind, number> = {
   rate_limit: 0,
   server: 1,
   network: 2,
-  forbidden: 3,
-  auth: 4,
+  quota_exhausted: 3,
+  forbidden: 4,
+  auth: 5,
 };
 
-const STICKY_MIN_MS = 20 * 60 * 1000;
-const STICKY_MAX_MS = 60 * 60 * 1000;
-
-function randomStickyDuration(): number {
-  return STICKY_MIN_MS + Math.random() * (STICKY_MAX_MS - STICKY_MIN_MS);
-}
+// Sticky routing removed — PoolAllocator now routes by composite
+// utilization (1m/5h/7d) so it needs freedom to pick the best account.
 
 interface AccountState {
   token: TokenData;
@@ -64,6 +70,8 @@ interface AccountState {
   totalCacheReadInputTokens: number;
   refreshing: boolean;
   refreshPromise: Promise<boolean> | null;
+  validatedAt: number | null;
+  validationFailed: boolean;
 }
 
 export function extractUsage(resp: any): UsageData {
@@ -91,10 +99,10 @@ export class AccountManager {
   private accounts: Map<string, AccountState> = new Map();
   private accountOrder: string[] = [];
   private lastUsedIndex: number = -1;
-  private stickyUntil: number = 0;
   private authDir: string;
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
   private statsTimer: ReturnType<typeof setInterval> | null = null;
+  private validationTimer: ReturnType<typeof setInterval> | null = null;
   private refreshing = false;
 
   constructor(authDir: string) {
@@ -131,6 +139,19 @@ export class AccountManager {
     saveToken(this.authDir, token);
   }
 
+  removeAccount(email: string): boolean {
+    const acct = this.accounts.get(email);
+    if (!acct) return false;
+    this.accounts.delete(email);
+    this.accountOrder = this.accountOrder.filter((e) => e !== email);
+    if (this.lastUsedIndex >= this.accountOrder.length) {
+      this.lastUsedIndex = this.accountOrder.length - 1;
+    }
+    deleteToken(this.authDir, email);
+    console.log(`[manager] Removed account ${email} from pool`);
+    return true;
+  }
+
   getNextAccount(): AccountResult {
     const count = this.accountOrder.length;
     if (count === 0) {
@@ -139,18 +160,8 @@ export class AccountManager {
 
     const now = Date.now();
 
-    // Try to keep using the current sticky account
-    if (this.lastUsedIndex >= 0 && now < this.stickyUntil) {
-      const email = this.accountOrder[this.lastUsedIndex];
-      const acct = this.accounts.get(email)!;
-      if (acct.cooldownUntil <= now) {
-        return {
-          account: buildAvailableAccount(this.authDir, email, acct.token),
-        };
-      }
-    }
-
-    // Pick the next available account
+    // Round-robin: pick the next available account (no stickiness —
+    // PoolAllocator handles routing by composite utilization).
     const startIdx = this.lastUsedIndex >= 0 ? this.lastUsedIndex + 1 : 0;
     for (let i = 0; i < count; i++) {
       const idx = (startIdx + i) % count;
@@ -158,7 +169,6 @@ export class AccountManager {
       const acct = this.accounts.get(email)!;
       if (acct.cooldownUntil <= now) {
         this.lastUsedIndex = idx;
-        this.stickyUntil = now + randomStickyDuration();
         return {
           account: buildAvailableAccount(this.authDir, email, acct.token),
         };
@@ -220,6 +230,7 @@ export class AccountManager {
     email: string,
     kind: AccountFailureKind,
     detail?: string,
+    cooldownUntilMs?: number,
   ): void {
     const acct = this.accounts.get(email);
     if (!acct) return;
@@ -230,16 +241,39 @@ export class AccountManager {
     acct.lastFailureAt = new Date().toISOString();
     acct.lastError = detail ? `${kind}: ${detail}` : kind;
 
-    const { baseMs, maxMs } = FAILURE_BACKOFF[kind];
-    const cooldownMs = Math.min(
-      baseMs * 2 ** Math.max(0, acct.failureCount - 1),
-      maxMs,
-    );
-    acct.cooldownUntil = Date.now() + cooldownMs;
-    console.log(
-      `[manager] ${email} cooled down ${Math.round(cooldownMs / 1000)}s (${kind})`,
-    );
+    // Forbidden means OAuth is not allowed for this account — skip it immediately
+    // rather than waiting for a cooldown to expire and burning another real request.
+    if (kind === "forbidden") {
+      if (!acct.validationFailed) {
+        console.warn(`[manager] ${acct.token.email} marked invalid (forbidden) — removed from pool`);
+      }
+      acct.validationFailed = true;
+      acct.cooldownUntil = 0;
+      return;
+    }
+
+    if (cooldownUntilMs && cooldownUntilMs > Date.now()) {
+      // Use exact reset time from upstream headers
+      acct.cooldownUntil = cooldownUntilMs;
+      const cooldownMs = cooldownUntilMs - Date.now();
+      console.log(
+        `[manager] ${email} cooled down ${Math.round(cooldownMs / 1000)}s until ${new Date(cooldownUntilMs).toISOString()} (${kind})`,
+      );
+    } else {
+      const { baseMs, maxMs } = FAILURE_BACKOFF[kind];
+      const cooldownMs = Math.min(
+        baseMs * 2 ** Math.max(0, acct.failureCount - 1),
+        maxMs,
+      );
+      acct.cooldownUntil = Date.now() + cooldownMs;
+      console.log(
+        `[manager] ${email} cooled down ${Math.round(cooldownMs / 1000)}s (${kind})`,
+      );
+    }
   }
+
+  /** No-op — upstream utilization is tracked by PoolAllocator's RateLimiter. */
+  recordUpstreamUtilization(_email: string, _util5h: number, _util7d: number): void {}
 
   async refreshAccount(email: string): Promise<boolean> {
     const acct = this.accounts.get(email);
@@ -255,7 +289,7 @@ export class AccountManager {
     for (const acct of this.accounts.values()) {
       snapshots.push({
         email: acct.token.email,
-        available: acct.cooldownUntil <= now,
+        available: acct.cooldownUntil <= now && !acct.validationFailed,
         cooldownUntil: acct.cooldownUntil,
         failureCount: acct.failureCount,
         lastError: acct.lastError,
@@ -271,6 +305,8 @@ export class AccountManager {
         totalCacheReadInputTokens: acct.totalCacheReadInputTokens,
         expiresAt: acct.token.expiresAt,
         refreshing: acct.refreshing,
+        validationFailed: acct.validationFailed,
+        validatedAt: acct.validatedAt,
       });
     }
     return snapshots;
@@ -309,6 +345,69 @@ export class AccountManager {
       clearInterval(this.statsTimer);
       this.statsTimer = null;
     }
+  }
+
+  startAccountValidation(cloaking: CloakingConfig): void {
+    const timer = setInterval(
+      () => this.validateAllAccounts(cloaking).catch((err) =>
+        console.error("[manager] Validation cycle failed:", err.message),
+      ),
+      VALIDATION_INTERVAL_MS,
+    );
+    timer.unref();
+    this.validationTimer = timer;
+    // Run immediately so invalid accounts are caught before first request
+    this.validateAllAccounts(cloaking).catch((err) =>
+      console.error("[manager] Initial validation failed:", err.message),
+    );
+  }
+
+  stopAccountValidation(): void {
+    if (this.validationTimer) {
+      clearInterval(this.validationTimer);
+      this.validationTimer = null;
+    }
+  }
+
+  /** Return all accounts not currently in cooldown and not validation-failed. */
+  getAvailableAccounts(): AvailableAccount[] {
+    const now = Date.now();
+    const result: AvailableAccount[] = [];
+    for (const email of this.accountOrder) {
+      const acct = this.accounts.get(email)!;
+      if (acct.cooldownUntil <= now && !acct.validationFailed) {
+        result.push(buildAvailableAccount(this.authDir, email, acct.token));
+      }
+    }
+    return result;
+  }
+
+  /** Return all account emails (for DB sync on startup). */
+  getAllEmails(): string[] {
+    return [...this.accountOrder];
+  }
+
+  /** Return all account access tokens keyed by email (for utilization checks). */
+  getAllAccessTokens(): Map<string, string> {
+    const result = new Map<string, string>();
+    for (const [email, acct] of this.accounts) {
+      result.set(email, acct.token.accessToken);
+    }
+    return result;
+  }
+
+  /** Get a specific account's token data (for DB sync). */
+  getToken(email: string): { token: TokenData; totalRequests: number; totalInputTokens: number; totalOutputTokens: number; totalCacheCreationInputTokens: number; totalCacheReadInputTokens: number } | undefined {
+    const acct = this.accounts.get(email);
+    if (!acct) return undefined;
+    return {
+      token: acct.token,
+      totalRequests: acct.totalRequests,
+      totalInputTokens: acct.totalInputTokens,
+      totalOutputTokens: acct.totalOutputTokens,
+      totalCacheCreationInputTokens: acct.totalCacheCreationInputTokens,
+      totalCacheReadInputTokens: acct.totalCacheReadInputTokens,
+    };
   }
 
   get accountCount(): number {
@@ -378,6 +477,64 @@ export class AccountManager {
     }
   }
 
+  private async validateAllAccounts(cloaking: CloakingConfig): Promise<void> {
+    const now = Date.now();
+    for (const acct of this.accounts.values()) {
+      const recentlyValidated =
+        acct.validatedAt !== null &&
+        now - acct.validatedAt < VALIDATION_CACHE_MS &&
+        !acct.validationFailed;
+      if (recentlyValidated) continue;
+      await this.validateAccount(acct, cloaking);
+    }
+  }
+
+  private async validateAccount(acct: AccountState, cloaking: CloakingConfig): Promise<void> {
+    const headers = buildHeaders({
+      token: acct.token.accessToken,
+      stream: false,
+      timeoutMs: VALIDATION_TIMEOUT_MS,
+      model: VALIDATION_MODEL,
+      cloaking,
+    });
+
+    let res: Response;
+    try {
+      res = await fetch(ANTHROPIC_COUNT_TOKENS_URL, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: VALIDATION_MODEL,
+          messages: [{ role: "user", content: "hi" }],
+        }),
+        signal: AbortSignal.timeout(VALIDATION_TIMEOUT_MS),
+      });
+    } catch {
+      // Network error — don't change validation state
+      return;
+    }
+
+    acct.validatedAt = Date.now();
+
+    if (res.ok) {
+      if (acct.validationFailed) {
+        console.log(`[manager] ${acct.token.email} validation recovered — added back to pool`);
+        acct.validationFailed = false;
+        acct.cooldownUntil = 0;
+        acct.failureCount = 0;
+      }
+    } else if (res.status === 403) {
+      if (!acct.validationFailed) {
+        console.warn(`[manager] ${acct.token.email} validation failed (403) — removed from pool`);
+      }
+      acct.validationFailed = true;
+    } else if (res.status === 401) {
+      // Token expired — trigger refresh; next validation cycle will re-check
+      await this.refreshAccount(acct.token.email);
+    }
+    // 429 / 5xx: account is reachable, don't invalidate
+  }
+
   private createAccountState(token: TokenData): AccountState {
     return {
       token,
@@ -397,6 +554,8 @@ export class AccountManager {
       totalCacheReadInputTokens: 0,
       refreshing: false,
       refreshPromise: null,
+      validatedAt: null,
+      validationFailed: false,
     };
   }
 }

@@ -8,7 +8,7 @@
  * - OpenAI Responses API format (POST /v1/responses)
  * - Anthropic Messages passthrough (POST /v1/messages)
  * - Token counting (POST /v1/messages/count_tokens)
- * - Multi-account rotation with sticky sessions
+ * - Multi-account rotation with multi-window utilization routing (1m/5h/7d)
  * - Automatic token refresh
  * - Request cloaking (fingerprint, billing header, system prompt injection)
  * - SSE streaming with format translation
@@ -46,6 +46,7 @@ export type {
   AccountResult,
   AccountSnapshot,
   AccountFailureKind,
+  AccountProvider,
   CloakingConfig,
   OAuth2ApiConfig,
 } from "./types.js";
@@ -61,7 +62,7 @@ export {
 export { waitForCallback } from "./callback.js";
 
 // Storage
-export { saveToken, loadAllTokens, getDeviceId } from "./storage.js";
+export { saveToken, loadAllTokens, deleteToken, getDeviceId } from "./storage.js";
 
 // Account management
 export { AccountManager, extractUsage } from "./manager.js";
@@ -93,6 +94,19 @@ export {
 
 // Proxy
 export { proxyWithRetry } from "./proxy.js";
+
+// Pool allocator (rate-limit-aware account selection)
+export { RateLimiter, PoolAllocator } from "./pool.js";
+
+// Seller OAuth endpoints
+export {
+  handleSellerAuthStart,
+  handleSellerAuthComplete,
+  handleSellerAuthRevoke,
+  handleSellerStatus,
+  handleSellerEarn,
+  handleSellerClaim,
+} from "./seller.js";
 
 // Router (main entry point)
 export { createOAuth2ApiRouter } from "./router.js";

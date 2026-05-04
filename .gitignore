@@ -4,14 +4,36 @@ node_modules/
 # Environment
 .env
 .env.local
+.env.*
+!.env.example
 .env.*.local
+
+# Credentials and local secrets
+*.pem
+*.key
+*.p12
+*.pfx
+*.credentials.*
+*.credential.*
+*.secrets.*
+*.secret.*
+*.tokens.*
+*.token.*
+credentials.*
+credential.*
+secrets.*
+secret.*
+tokens.*
+token.*
 
 # Runtime data
 data/
 cmds/.env.test
+*.tsbuildinfo
 
 # Build output
 dist/
+frontend/dist/
 
 # Bun
 bun.lock
@@ -21,9 +43,18 @@ bun.lock
 
 # macOS
 .DS_Store
+._*
 
 # Logs
 *.log
+
+# Local backups and temp files
+*.bak
+*.bak.*
+*.tmp
+*.temp
+*.swp
+*.swo
 
 # Markdown docs (exclude all except README and CLAUDE.md)
 *.md

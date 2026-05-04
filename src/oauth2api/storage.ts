@@ -44,6 +44,20 @@ export function saveToken(authDir: string, data: TokenData): void {
   });
 }
 
+export function deleteToken(authDir: string, email: string): boolean {
+  const sanitized = email
+    .replace(/[^a-zA-Z0-9@._-]/g, "_")
+    .replace(/\.\./g, "_");
+  const filename = `claude-${sanitized}.json`;
+  const filePath = path.join(authDir, filename);
+  try {
+    fs.unlinkSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function loadAllTokens(authDir: string): TokenData[] {
   if (!fs.existsSync(authDir)) return [];
   const files = fs

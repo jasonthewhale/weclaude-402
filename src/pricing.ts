@@ -9,27 +9,43 @@
 export interface TokenPricing {
   inputPerMTok: number;
   outputPerMTok: number;
+  cacheCreationPerMTok: number;  // 1.25x input
+  cacheReadPerMTok: number;      // 0.1x input
+}
+
+/** Discount multiplier applied to all pricing. Set to 1 for production rates. */
+const DISCOUNT = 0.1;
+
+/** Build pricing with correct cache multipliers (1.25x create, 0.1x read). */
+function pricing(inputPerMTok: number, outputPerMTok: number): TokenPricing {
+  return {
+    inputPerMTok: inputPerMTok * DISCOUNT,
+    outputPerMTok: outputPerMTok * DISCOUNT,
+    cacheCreationPerMTok: inputPerMTok * 1.25 * DISCOUNT,
+    cacheReadPerMTok: inputPerMTok * 0.1 * DISCOUNT,
+  };
 }
 
 /** Pricing per model family (USD per million tokens). */
 const MODEL_PRICING: Record<string, TokenPricing> = {
-  // Opus 4
-  "claude-opus-4-6": { inputPerMTok: 15, outputPerMTok: 75 },
-  opus: { inputPerMTok: 15, outputPerMTok: 75 },
+  // Opus 4.7 / 4.6 / 4.5 — $5 input, $25 output
+  "claude-opus-4-7": pricing(5, 25),
+  "claude-opus-4-6": pricing(5, 25),
+  opus: pricing(5, 25),
 
-  // Sonnet 4
-  "claude-sonnet-4-6": { inputPerMTok: 3, outputPerMTok: 15 },
-  "claude-sonnet-4-20250514": { inputPerMTok: 3, outputPerMTok: 15 },
-  sonnet: { inputPerMTok: 3, outputPerMTok: 15 },
+  // Sonnet 4.6 — $3 input, $15 output
+  "claude-sonnet-4-6": pricing(3, 15),
+  "claude-sonnet-4-20250514": pricing(3, 15),
+  sonnet: pricing(3, 15),
 
-  // Haiku 3.5
-  "claude-haiku-4-5-20251001": { inputPerMTok: 0.8, outputPerMTok: 4 },
-  "claude-haiku-4-5": { inputPerMTok: 0.8, outputPerMTok: 4 },
-  haiku: { inputPerMTok: 0.8, outputPerMTok: 4 },
+  // Haiku 4.5 — $1 input, $5 output
+  "claude-haiku-4-5-20251001": pricing(1, 5),
+  "claude-haiku-4-5": pricing(1, 5),
+  haiku: pricing(1, 5),
 };
 
 /** Fallback to Sonnet pricing if model is unknown. */
-const DEFAULT_PRICING: TokenPricing = { inputPerMTok: 3, outputPerMTok: 15 };
+const DEFAULT_PRICING: TokenPricing = pricing(3, 15);
 
 export function getPricing(model: string): TokenPricing {
   return MODEL_PRICING[model] || DEFAULT_PRICING;
@@ -46,16 +62,18 @@ export function calculateCost(
   model: string,
   usage: { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number },
 ): number {
-  const pricing = getPricing(model);
-  const inputTokens = (usage.input_tokens || 0) + (usage.cache_creation_input_tokens || 0);
-  // Cache reads are typically cheaper, but we charge full input price for simplicity
+  const p = getPricing(model);
+  const inputTokens = usage.input_tokens || 0;
+  const cacheCreationTokens = usage.cache_creation_input_tokens || 0;
   const cacheReadTokens = usage.cache_read_input_tokens || 0;
   const outputTokens = usage.output_tokens || 0;
 
-  const inputCost = ((inputTokens + cacheReadTokens) / 1_000_000) * pricing.inputPerMTok;
-  const outputCost = (outputTokens / 1_000_000) * pricing.outputPerMTok;
+  const inputCost = (inputTokens / 1_000_000) * p.inputPerMTok;
+  const cacheCreateCost = (cacheCreationTokens / 1_000_000) * p.cacheCreationPerMTok;
+  const cacheReadCost = (cacheReadTokens / 1_000_000) * p.cacheReadPerMTok;
+  const outputCost = (outputTokens / 1_000_000) * p.outputPerMTok;
 
-  return inputCost + outputCost;
+  return inputCost + cacheCreateCost + cacheReadCost + outputCost;
 }
 
 /**

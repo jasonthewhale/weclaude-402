@@ -23,6 +23,7 @@ export interface TokenStorage {
 
 export type AccountFailureKind =
   | "rate_limit"
+  | "quota_exhausted"
   | "auth"
   | "forbidden"
   | "server"
@@ -67,6 +68,22 @@ export interface AccountSnapshot {
   totalCacheReadInputTokens: number;
   expiresAt: string;
   refreshing: boolean;
+  validationFailed: boolean;
+  validatedAt: number | null;
+}
+
+/**
+ * Common interface for account selection — implemented by both
+ * AccountManager (direct) and PoolAllocator (rate-limit-aware).
+ */
+export interface AccountProvider {
+  getNextAccount(estimatedTokens?: number): AccountResult;
+  recordAttempt(email: string): void;
+  recordSuccess(email: string, usage?: UsageData): void;
+  recordFailure(email: string, kind: AccountFailureKind, detail?: string, cooldownUntilMs?: number): void;
+  refreshAccount(email: string): Promise<boolean>;
+  /** Update upstream-reported 5h/7d utilization from response headers. */
+  recordUpstreamUtilization(email: string, util5h: number, util7d: number): void;
 }
 
 export interface CloakingConfig {

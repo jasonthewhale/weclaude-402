@@ -9,7 +9,7 @@ import {
 } from "@okxweb3/x402-express";
 import { ExactEvmScheme } from "@okxweb3/x402-evm/exact/server";
 import { AggrDeferredEvmScheme } from "@okxweb3/x402-evm/deferred/server";
-import { NETWORK, PAY_TO, USDG_ASSET, TOPUP_USD, TOPUP_TIERS, usdToAtomic } from "../config.js";
+import { NETWORK, PAY_TO, USDG_ASSET, TOPUP_USD, TOPUP_TIERS, usdToAtomic, tierPath } from "../config.js";
 
 export interface X402Setup {
   resourceServer: InstanceType<typeof x402ResourceServer>;
@@ -44,7 +44,7 @@ export function createX402Setup(): X402Setup {
 
   for (const usd of TOPUP_TIERS) {
     const amount = usdToAtomic(usd);
-    const path = usd === TOPUP_USD ? "POST /v1/topup" : `POST /v1/topup/${usd}`;
+    const path = `POST ${tierPath(usd)}`;
     topupRoutes[path] = {
       accepts: [
         { scheme: "exact",         network: NETWORK, payTo: PAY_TO, price: { asset: USDG_ASSET, amount }, maxTimeoutSeconds: 600 },

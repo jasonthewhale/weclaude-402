@@ -25,13 +25,24 @@ export interface StreamResult {
 }
 
 function extractUsageFromSSE(event: string, data: any, usage: UsageData): void {
+  // message_start carries input tokens + cache breakdown
+  if (event === "message_start") {
+    const u = data?.message?.usage;
+    if (!u) return;
+    usage.inputTokens = u.input_tokens || 0;
+    usage.cacheCreationInputTokens = u.cache_creation_input_tokens || 0;
+    usage.cacheReadInputTokens = u.cache_read_input_tokens || 0;
+    return;
+  }
+
+  // message_delta carries final output tokens (and may override input tokens)
   if (event !== "message_delta") return;
   const u = data.usage;
   if (!u) return;
-  usage.inputTokens = u.input_tokens || 0;
+  if (u.input_tokens) usage.inputTokens = u.input_tokens;
   usage.outputTokens = u.output_tokens || 0;
-  usage.cacheCreationInputTokens = u.cache_creation_input_tokens || 0;
-  usage.cacheReadInputTokens = u.cache_read_input_tokens || 0;
+  if (u.cache_creation_input_tokens) usage.cacheCreationInputTokens = u.cache_creation_input_tokens;
+  if (u.cache_read_input_tokens) usage.cacheReadInputTokens = u.cache_read_input_tokens;
 }
 
 export async function handleStreamingResponse(

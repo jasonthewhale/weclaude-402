@@ -11,13 +11,17 @@ export function refundBuyer(
 ): { success: boolean; output?: string; error?: string } {
   if (refundUsd <= 0) return { success: true, output: "no-refund-needed" };
 
+  // USDG has 6 decimals. Convert USD → atomic units and use --amt to avoid the
+  // CLI's decimal-fetch path, which requires an OKX API key.
+  const atomic = Math.round(refundUsd * 1_000_000);
+
   const cmd = [
-    "onchainos wallet send",
+    "/home/ubuntu/.local/bin/onchainos wallet send",
     `--chain 196`,
     `--from ${PAY_TO}`,
     `--recipient ${buyerAddress}`,
     `--contract-token ${USDG_ASSET}`,
-    `--readable-amount ${refundUsd.toFixed(6)}`,
+    `--amt ${atomic}`,
     `--force`,
   ].join(" ");
 

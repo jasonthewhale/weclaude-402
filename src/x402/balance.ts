@@ -9,6 +9,7 @@
 import {
   getDb,
   getBuyer,
+  getBuyerByPayer,
   createBuyer,
   updateBalance,
   generateApiKey,
@@ -57,6 +58,11 @@ export function saveSessions(): void {
 
 export function getBalance(key: string): AccountBalance | undefined {
   const row = getBuyer(key);
+  return row ? toAccount(row) : undefined;
+}
+
+export function getBalanceByPayer(payer: string): AccountBalance | undefined {
+  const row = getBuyerByPayer(payer);
   return row ? toAccount(row) : undefined;
 }
 

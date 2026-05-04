@@ -1,6 +1,6 @@
 # x402 Payment Flow — Header Assembly & Replay
 
-This reference covers the technical detail for building the `PAYMENT-SIGNATURE` / `X-PAYMENT` header and replaying the request to `/v1/topup` after signing.
+This reference covers the technical detail for building the `PAYMENT-SIGNATURE` / `X-PAYMENT` header and replaying the request to `/v1/buyer/topup` after signing.
 
 ## Header Name
 
@@ -16,8 +16,8 @@ Determine from `decoded.x402Version` (read from the 402 challenge JSON):
 After signing with `onchainos payment x402-pay`, you have:
 - `SIGNATURE` — the hex signature string (from `data.signature` or top-level `signature`)
 - `AUTHORIZATION` — the authorization object (from `data.authorization` or top-level `authorization`)
-- `DECODED` — the full 402 challenge JSON (parsed from the `PAYMENT-REQUIRED` header)
-- `OPTION` — `DECODED.accepts[0]`
+- `DECODED` — the full 402 challenge JSON (the 402 response body, saved to `/tmp/weclaude-challenge.json`)
+- `OPTION` — `DECODED.accepted` (the payment option object from the body)
 
 Construct the payload:
 
@@ -42,7 +42,7 @@ import json, base64, sys
 with open('/tmp/weclaude-challenge.json') as f:
     decoded = json.load(f)
 
-option = decoded['accepts'][0]
+option = decoded['accepted']
 signature = sys.argv[1]
 authorization = json.loads(sys.argv[2])
 
@@ -61,7 +61,7 @@ HEADER_VALUE=$(cat /tmp/weclaude-payment-header.txt)
 ## Replaying the Request
 
 ```bash
-curl -s -X POST "<SERVER_URL>/v1/topup" \
+curl -s -X POST "<SERVER_URL>/v1/buyer/topup" \
   -H "Content-Type: application/json" \
   -H "<HEADER_NAME>: $HEADER_VALUE"
 ```
@@ -73,7 +73,7 @@ curl -s -X POST "<SERVER_URL>/v1/topup" \
   "api_key": "sk-x402-...",
   "balance": "$0.10",
   "pricing": "real token usage — varies by model",
-  "close_url": "/v1/close",
+  "withdraw_url": "/v1/buyer/withdraw",
   "usage": "Authorization: Bearer sk-x402-..."
 }
 ```
